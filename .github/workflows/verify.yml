@@ -1,0 +1,31 @@
+name: Verify
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+      - name: Build
+        run: swift build --disable-sandbox
+      - name: List tests
+        run: |
+          swift test --disable-sandbox list > test-list.txt
+          grep -E "BattaryTests\\." test-list.txt
+      - name: Test
+        run: swift test --disable-sandbox
+      - name: Package smoke test
+        run: ./script/build_app.sh 0.1.0 release
+      - name: Validate app bundle
+        run: |
+          test -d "dist/Better Battery.app"
+          test -f "dist/Better Battery.app/Contents/MacOS/Battary"
+          test -f "dist/Better Battery.app/Contents/Resources/AppIcon.icns"
+          test -f "dist/Better-Battery-v0.1.0-macOS.dmg"
+          plutil -extract CFBundleName raw "dist/Better Battery.app/Contents/Info.plist" | grep "Better Battery"
+          plutil -extract CFBundleIdentifier raw "dist/Better Battery.app/Contents/Info.plist" | grep "dev.sayrrexe.BetterBattery"

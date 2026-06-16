@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+      - name: Resolve version
+        id: version
+        run: |
+          git fetch --tags --force
+          latest="$(git tag -l 'v0.1.*' --sort=-v:refname | head -n 1)"
+          if [[ -z "$latest" ]]; then
+            next="v0.1.0"
+          else
+            patch="${latest##*.}"
+            next="v0.1.$((patch + 1))"
+          fi
+          while git rev-parse "$next" >/dev/null 2>&1; do
+            patch="${next##*.}"
+            next="v0.1.$((patch + 1))"
+          done
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
+          echo "version=${next#v}" >> "$GITHUB_OUTPUT"
+      - name: Build
+        run: swift build --disable-sandbox
+      - name: List tests
+        run: |
+          swift test --disable-sandbox list > test-list.txt
+          grep -E "BattaryTests\\." test-list.txt
+      - name: Test
+        run: swift test --disable-sandbox
+      - name: Package
+        run: ./script/build_app.sh "${{ steps.version.outputs.version }}" release
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+          gh release create "${{ steps.version.outputs.tag }}" "dist/Better-Battery-v${{ steps.version.outputs.version }}-macOS.dmg" --title "Better Battery ${{ steps.version.outputs.tag }}" --notes "Unsigned macOS DMG for Better Battery ${{ steps.version.outputs.tag }}."
