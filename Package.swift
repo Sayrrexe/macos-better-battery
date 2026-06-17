@@ -13,6 +13,9 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Battary",
+            resources: [
+                .copy("Resources/Mascots")
+            ],
             linkerSettings: [
                 .linkedFramework("IOKit")
             ]

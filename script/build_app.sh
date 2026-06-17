@@ -18,7 +18,7 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$EXECUTABLE_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
-MASCOT_ASSETS="$ROOT_DIR/Assets/Mascots"
+MASCOT_ASSETS="$ROOT_DIR/Sources/Battary/Resources/Mascots"
 APP_ICONSET="$DIST_DIR/AppIcon.iconset"
 APP_ICON="$APP_RESOURCES/AppIcon.icns"
 DMG_STAGING="$DIST_DIR/dmg"
@@ -33,7 +33,9 @@ export CLANG_MODULE_CACHE_PATH="$ROOT_DIR/.build/clang-module-cache"
 mkdir -p "$CLANG_MODULE_CACHE_PATH" "$DIST_DIR"
 
 swift build "${SWIFT_BUILD_FLAGS[@]}"
-BUILD_BINARY="$(swift build "${SWIFT_BUILD_FLAGS[@]}" --show-bin-path)/$EXECUTABLE_NAME"
+BUILD_DIR="$(swift build "${SWIFT_BUILD_FLAGS[@]}" --show-bin-path)"
+BUILD_BINARY="$BUILD_DIR/$EXECUTABLE_NAME"
+BUILD_RESOURCE_BUNDLE="$BUILD_DIR/${EXECUTABLE_NAME}_${EXECUTABLE_NAME}.bundle"
 
 rm -rf "$APP_BUNDLE" "$APP_ICONSET" "$DMG_STAGING"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES/Mascots"
@@ -46,6 +48,14 @@ copy_mascot_assets() {
   fi
 
   find "$MASCOT_ASSETS" -maxdepth 1 -type f -name "*.png" -exec cp {} "$APP_RESOURCES/Mascots/" \;
+}
+
+copy_swiftpm_resource_bundle() {
+  if [[ ! -d "$BUILD_RESOURCE_BUNDLE" ]]; then
+    return
+  fi
+
+  cp -R "$BUILD_RESOURCE_BUNDLE" "$APP_RESOURCES/"
 }
 
 generate_app_icon() {
@@ -148,6 +158,7 @@ create_dmg() {
 }
 
 copy_mascot_assets
+copy_swiftpm_resource_bundle
 generate_app_icon
 write_info_plist
 sign_app

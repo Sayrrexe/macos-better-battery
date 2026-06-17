@@ -35,14 +35,17 @@ enum CatMascotState: String {
 
 enum CatMascotAssets {
     static func image(for state: CatMascotState) -> NSImage? {
-        guard let url = Bundle.main.url(
-            forResource: state.resourceName,
-            withExtension: "png",
-            subdirectory: "Mascots"
-        ) else {
-            return nil
+        if let image = image(for: state, in: .main) {
+            return image
         }
 
+        return image(for: state, in: .module)
+    }
+
+    private static func image(for state: CatMascotState, in bundle: Bundle) -> NSImage? {
+        guard let url = bundle.url(forResource: state.resourceName, withExtension: "png", subdirectory: "Mascots") else {
+            return nil
+        }
         return NSImage(contentsOf: url)
     }
 }
