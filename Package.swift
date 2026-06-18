@@ -20,9 +20,5 @@ let package = Package(
                 .linkedFramework("IOKit")
             ]
         ),
-        .testTarget(
-            name: "BattaryTests",
-            dependencies: ["Battary"]
-        )
     ]
 )
