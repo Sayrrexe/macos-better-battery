@@ -42,7 +42,12 @@ jobs:
           grep -E "BattaryTests\\." test-list.txt
       - name: Test
         run: swift test --disable-sandbox
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Package
+        env:
+          DMGBUILD_VERSION: "1.6.7"
         run: ./script/build_app.sh "${{ steps.version.outputs.version }}" release
       - name: Create release
         env:

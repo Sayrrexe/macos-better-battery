@@ -4,6 +4,7 @@ set -euo pipefail
 VERSION="${1:-${VERSION:-0.1.0}}"
 CONFIGURATION="${2:-${CONFIGURATION:-release}}"
 CREATE_DMG="${CREATE_DMG:-1}"
+DMGBUILD_VERSION="${DMGBUILD_VERSION:-1.6.7}"
 
 APP_DISPLAY_NAME="Better Battery"
 EXECUTABLE_NAME="Battary"
@@ -19,13 +20,13 @@ APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$EXECUTABLE_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 MASCOT_ASSETS="$ROOT_DIR/Sources/Battary/Resources/Mascots"
+DMG_BACKGROUND="$ROOT_DIR/Assets/Installer/dmg-background.png"
+DMG_SETTINGS="$ROOT_DIR/script/dmg_settings.py"
 APP_ICONSET="$DIST_DIR/AppIcon.iconset"
 APP_ICON="$APP_RESOURCES/AppIcon.icns"
 DMG_STAGING="$DIST_DIR/dmg"
-DMG_STAGED_APP="$DMG_STAGING/$APP_DISPLAY_NAME.app"
 DMG_PATH="$DIST_DIR/Better-Battery-v$VERSION-macOS.dmg"
-DMG_RW_PATH="$DIST_DIR/Better-Battery-v$VERSION-macOS-rw.dmg"
-DMG_MOUNT_POINT="/Volumes/$APP_DISPLAY_NAME"
+DMGBUILD_VENV="${DMGBUILD_VENV:-$ROOT_DIR/.build/dmgbuild-venv}"
 SWIFT_BUILD_FLAGS=(--configuration "$CONFIGURATION" --disable-sandbox)
 
 export CLANG_MODULE_CACHE_PATH="$ROOT_DIR/.build/clang-module-cache"
@@ -127,9 +128,9 @@ clear_bundle_metadata() {
   if command -v dot_clean >/dev/null 2>&1; then
     dot_clean -m "$bundle_path"
   fi
-  if command -v SetFile >/dev/null 2>&1; then
-    SetFile -a b "$bundle_path"
-  fi
+  xattr -d -r com.apple.FinderInfo "$bundle_path" 2>/dev/null || true
+  xattr -d -r com.apple.ResourceFork "$bundle_path" 2>/dev/null || true
+  xattr -d -r 'com.apple.fileprovider.fpfs#P' "$bundle_path" 2>/dev/null || true
 }
 
 sign_app() {
@@ -138,22 +139,122 @@ sign_app() {
   clear_bundle_metadata "$APP_BUNDLE"
 }
 
-create_dmg() {
-  rm -f "$DMG_PATH" "$DMG_RW_PATH"
-  mkdir -p "$DMG_STAGING"
-  ditto --noextattr --norsrc "$APP_BUNDLE" "$DMG_STAGED_APP"
-  clear_bundle_metadata "$DMG_STAGED_APP"
-  ln -s /Applications "$DMG_STAGING/Applications"
-  hdiutil create -volname "$APP_DISPLAY_NAME" -srcfolder "$DMG_STAGING" -ov -format UDRW -fs HFS+ "$DMG_RW_PATH" >/dev/null
-  if [[ -d "$DMG_MOUNT_POINT" ]]; then
-    hdiutil detach "$DMG_MOUNT_POINT" >/dev/null 2>&1 || true
+resolve_dmgbuild() {
+  if [[ -n "${DMGBUILD_BIN:-}" ]]; then
+    if command -v "$DMGBUILD_BIN" >/dev/null 2>&1; then
+      command -v "$DMGBUILD_BIN"
+      return
+    fi
+
+    if [[ -x "$DMGBUILD_BIN" ]]; then
+      printf '%s\n' "$DMGBUILD_BIN"
+      return
+    fi
+
+    echo "DMGBUILD_BIN is set but is not executable: $DMGBUILD_BIN" >&2
+    exit 1
   fi
-  hdiutil attach "$DMG_RW_PATH" -nobrowse -readwrite >/dev/null
-  clear_bundle_metadata "$DMG_MOUNT_POINT/$APP_DISPLAY_NAME.app"
-  hdiutil detach "$DMG_MOUNT_POINT" >/dev/null
-  hdiutil convert "$DMG_RW_PATH" -format UDZO -o "$DMG_PATH" >/dev/null
-  rm -f "$DMG_RW_PATH"
+
+  local dmgbuild_bin="$DMGBUILD_VENV/bin/dmgbuild"
+  if [[ -x "$dmgbuild_bin" ]]; then
+    printf '%s\n' "$dmgbuild_bin"
+    return
+  fi
+
+  local python_bin
+  python_bin="$(resolve_dmgbuild_python)"
+  if [[ -z "$python_bin" ]]; then
+    echo "Python >=3.10 is required to install dmgbuild==$DMGBUILD_VERSION" >&2
+    exit 1
+  fi
+
+  rm -rf "$DMGBUILD_VENV"
+  "$python_bin" -m venv "$DMGBUILD_VENV"
+  if ! "$DMGBUILD_VENV/bin/python" -m pip --version >/dev/null 2>&1; then
+    echo "pip is required in the dmgbuild virtual environment: $DMGBUILD_VENV" >&2
+    exit 1
+  fi
+
+  "$DMGBUILD_VENV/bin/python" -m pip install "dmgbuild==$DMGBUILD_VERSION" >/dev/null
+  printf '%s\n' "$dmgbuild_bin"
+}
+
+resolve_dmgbuild_python() {
+  local candidates=()
+
+  if [[ -n "${DMGBUILD_PYTHON_BIN:-}" ]]; then
+    candidates+=("$DMGBUILD_PYTHON_BIN")
+  fi
+
+  candidates+=(python3.13 python3.12 python3.11 python3.10 python3)
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" - <<'PY' >/dev/null 2>&1
+import sys
+
+raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
+PY
+    then
+      command -v "$candidate"
+      return
+    fi
+
+    if [[ -x "$candidate" ]] && "$candidate" - <<'PY' >/dev/null 2>&1
+import sys
+
+raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
+PY
+    then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+}
+
+create_dmg() {
+  if [[ ! -f "$DMG_SETTINGS" ]]; then
+    echo "DMG settings file is missing: $DMG_SETTINGS" >&2
+    exit 1
+  fi
+
+  if [[ ! -f "$DMG_BACKGROUND" ]]; then
+    echo "DMG background file is missing: $DMG_BACKGROUND" >&2
+    exit 1
+  fi
+
+  local dmgbuild_bin
+  dmgbuild_bin="$(resolve_dmgbuild)"
+
+  local temp_dir
+  local dmg_app
+  local dmg_rw_path
+  local dmg_mount_point
+  temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/better-battery-dmg.XXXXXX")"
+  dmg_app="$temp_dir/$APP_DISPLAY_NAME.app"
+  dmg_rw_path="$temp_dir/Better-Battery-v$VERSION-macOS-rw.dmg"
+  dmg_mount_point="$temp_dir/mount"
+  ditto --noextattr --norsrc "$APP_BUNDLE" "$dmg_app"
+  clear_bundle_metadata "$dmg_app"
+  codesign --force --deep --sign - "$dmg_app" >/dev/null
+  clear_bundle_metadata "$dmg_app"
+  mkdir -p "$dmg_mount_point"
+
+  rm -f "$DMG_PATH"
   rm -rf "$DMG_STAGING"
+  "$dmgbuild_bin" \
+    -s "$DMG_SETTINGS" \
+    -D "app=$dmg_app" \
+    -D "background=$DMG_BACKGROUND" \
+    -D "app_name=$APP_DISPLAY_NAME.app" \
+    -D "image_format=UDRW" \
+    "$APP_DISPLAY_NAME" \
+    "$dmg_rw_path"
+  hdiutil attach "$dmg_rw_path" -nobrowse -readwrite -mountpoint "$dmg_mount_point" >/dev/null
+  clear_bundle_metadata "$dmg_mount_point/$APP_DISPLAY_NAME.app"
+  hdiutil detach "$dmg_mount_point" >/dev/null
+  hdiutil convert "$dmg_rw_path" -format UDZO -imagekey zlib-level=9 -o "$DMG_PATH" -ov >/dev/null
+  rm -rf "$temp_dir"
   clear_bundle_metadata "$APP_BUNDLE"
 }
 

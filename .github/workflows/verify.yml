@@ -19,7 +19,12 @@ jobs:
           grep -E "BattaryTests\\." test-list.txt
       - name: Test
         run: swift test --disable-sandbox
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Package smoke test
+        env:
+          DMGBUILD_VERSION: "1.6.7"
         run: ./script/build_app.sh 0.1.0 release
       - name: Validate app bundle
         run: |
@@ -29,3 +34,25 @@ jobs:
           test -f "dist/Better-Battery-v0.1.0-macOS.dmg"
           plutil -extract CFBundleName raw "dist/Better Battery.app/Contents/Info.plist" | grep "Better Battery"
           plutil -extract CFBundleIdentifier raw "dist/Better Battery.app/Contents/Info.plist" | grep "dev.sayrrexe.BetterBattery"
+          hdiutil verify "dist/Better-Battery-v0.1.0-macOS.dmg"
+          mount_dir="$(mktemp -d)"
+          hdiutil attach "dist/Better-Battery-v0.1.0-macOS.dmg" -nobrowse -readonly -mountpoint "$mount_dir"
+          trap 'hdiutil detach "$mount_dir" >/dev/null 2>&1 || true; rmdir "$mount_dir" >/dev/null 2>&1 || true' EXIT
+          test -d "$mount_dir/Better Battery.app"
+          test -L "$mount_dir/Applications"
+          test "$(readlink "$mount_dir/Applications")" = "/Applications"
+          test -f "$mount_dir/.DS_Store"
+          test -f "$mount_dir/.background.png"
+          codesign --verify --deep --strict --verbose=2 "$mount_dir/Better Battery.app"
+          .build/dmgbuild-venv/bin/python - "$mount_dir/.DS_Store" <<'PY'
+          import sys
+          from ds_store import DSStore
+
+          positions = {}
+          with DSStore.open(sys.argv[1], "r") as store:
+              for entry in store:
+                  if entry.code == b"Iloc" and entry.filename in ("Better Battery.app", "Applications"):
+                      positions[entry.filename] = entry.value
+          if positions != {"Better Battery.app": (180, 245), "Applications": (540, 245)}:
+              raise SystemExit(f"Unexpected icon positions: {positions}")
+          PY
