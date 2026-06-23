@@ -10,6 +10,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     private var cancellables = Set<AnyCancellable>()
     private var localEventMonitor: Any?
     private var globalEventMonitor: Any?
+    private var appearanceObservation: NSKeyValueObservation?
     private var lastStatusImageKey: StatusImageKey?
     private var lastToolTip: String?
 
@@ -41,6 +42,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         if let globalEventMonitor {
             NSEvent.removeMonitor(globalEventMonitor)
         }
+        appearanceObservation?.invalidate()
     }
 
     private func configureStatusItem() {
@@ -53,6 +55,9 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         button.imageScaling = .scaleProportionallyDown
         button.title = ""
         button.toolTip = AppMetadata.displayName
+
+        observeStatusButtonAppearance(button)
+        refreshStatusImageAfterLayout()
     }
 
     private func configurePopover() {
@@ -170,6 +175,26 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
             .store(in: &cancellables)
     }
 
+    private func observeStatusButtonAppearance(_ button: NSStatusBarButton) {
+        appearanceObservation = button.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor [weak self] in
+                self?.refreshStatusImage()
+            }
+        }
+    }
+
+    private func refreshStatusImageAfterLayout() {
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            self?.refreshStatusImage()
+        }
+    }
+
+    private func refreshStatusImage() {
+        lastStatusImageKey = nil
+        updateStatusImage(snapshot: monitor.snapshot)
+    }
+
     private func updateStatusImage(snapshot: BatterySnapshot) {
         guard let button = statusItem.button else { return }
 
@@ -183,7 +208,8 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
             button.image = StatusBarBatteryImageRenderer.image(
                 percent: snapshot.stateOfChargePercent,
                 progress: Double(snapshot.stateOfChargePercent ?? 0) / 100,
-                isCharging: snapshot.isCharging
+                isCharging: snapshot.isCharging,
+                appearance: button.effectiveAppearance
             )
             lastStatusImageKey = imageKey
         }
